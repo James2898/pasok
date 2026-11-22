@@ -165,6 +165,35 @@ describe("Phase 0 Foundation — Schema, RLS, Activity Log Trigger & Seed", () =
       `)
     ).rejects.toThrow(/activity_log is append-only: direct DELETE is not permitted/i);
 
+    // 2b. Even a DELETE triggered inside another table's trigger (pg_trigger_depth() > 1)
+    //     must be rejected while the parent student and class still exist
+    await db.exec(`
+      CREATE OR REPLACE FUNCTION public.test_rogue_log_delete()
+      RETURNS trigger LANGUAGE plpgsql AS $$
+      BEGIN
+        DELETE FROM public.activity_log WHERE student_id = '${tempStudentId}';
+        RETURN NEW;
+      END;
+      $$;
+      CREATE TRIGGER rogue_delete_trigger
+        AFTER UPDATE ON public.holidays
+        FOR EACH STATEMENT
+        EXECUTE FUNCTION public.test_rogue_log_delete();
+    `);
+
+    await expect(
+      db.exec(`
+        UPDATE public.holidays
+        SET name = name
+        WHERE class_id = '11111111-1111-4111-8111-111111111111';
+      `)
+    ).rejects.toThrow(/activity_log is append-only: direct DELETE is not permitted/i);
+
+    await db.exec(`
+      DROP TRIGGER rogue_delete_trigger ON public.holidays;
+      DROP FUNCTION public.test_rogue_log_delete();
+    `);
+
     // 3. True deletion of the student cascades and deletes that student's activity_log rows
     await db.exec(`
       DELETE FROM public.students WHERE id = '${tempStudentId}';

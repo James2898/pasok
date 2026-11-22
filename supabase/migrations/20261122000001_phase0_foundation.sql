@@ -375,14 +375,17 @@ CREATE INDEX IF NOT EXISTS activity_log_student_id_idx
 -- -----------------------------------------------------------------------------
 -- UPDATE is always rejected.
 -- DELETE is allowed ONLY when:
---   1. Fired via ON DELETE CASCADE from deleting a parent row in classes or
---      students (pg_trigger_depth() > 1), OR
+--   1. Fired via ON DELETE CASCADE from a parent row in public.classes or
+--      public.students (verified by pg_trigger_depth() > 1 AND confirming the
+--      referenced class_id or student_id no longer exists in its parent table), OR
 --   2. Explicitly authorized in a maintenance transaction via
 --      set_config('pasok.allow_log_delete', 'on', true).
 CREATE OR REPLACE FUNCTION public.guard_activity_log_immutability()
 RETURNS trigger
 LANGUAGE plpgsql
 AS $$
+DECLARE
+  v_parent_deleted boolean := false;
 BEGIN
   IF TG_OP = 'UPDATE' THEN
     RAISE EXCEPTION 'activity_log is append-only: UPDATE is not permitted'
@@ -390,9 +393,24 @@ BEGIN
   END IF;
 
   IF TG_OP = 'DELETE' THEN
-    IF pg_trigger_depth() > 1
-       OR coalesce(current_setting('pasok.allow_log_delete', true), '') = 'on' THEN
+    IF coalesce(current_setting('pasok.allow_log_delete', true), '') = 'on' THEN
       RETURN OLD;
+    END IF;
+
+    IF pg_trigger_depth() > 1 THEN
+      IF OLD.student_id IS NOT NULL AND NOT EXISTS (
+        SELECT 1 FROM public.students WHERE id = OLD.student_id
+      ) THEN
+        v_parent_deleted := true;
+      ELSIF OLD.class_id IS NOT NULL AND NOT EXISTS (
+        SELECT 1 FROM public.classes WHERE id = OLD.class_id
+      ) THEN
+        v_parent_deleted := true;
+      END IF;
+
+      IF v_parent_deleted THEN
+        RETURN OLD;
+      END IF;
     END IF;
 
     RAISE EXCEPTION 'activity_log is append-only: direct DELETE is not permitted (only cascade delete from student/class cleanup)'

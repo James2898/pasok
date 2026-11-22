@@ -24,7 +24,7 @@ export async function setLocaleAction(formData: FormData): Promise<void> {
     path: "/",
     maxAge: ONE_YEAR_SECONDS,
     sameSite: "lax",
-    httpOnly: false,
+    httpOnly: true,
     secure: process.env.NODE_ENV === "production",
   });
 
